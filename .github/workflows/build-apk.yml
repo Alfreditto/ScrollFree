@@ -88,15 +88,20 @@ jobs:
             exit 1
           fi
           echo "::notice::KEYSTORE_PASSWORD OK"
-          # Check the KEY password by exporting the entry (this reads the private key).
-          if ! keytool -exportcert -alias "$KEY_ALIAS" -keystore "$K" \
-                -storepass "$KEYSTORE_PASSWORD" -keypass "$KEY_PASSWORD" \
-                > /dev/null 2>&1; then
-            echo "::error::KEY_PASSWORD o KEY_ALIAS incorrectos (la clave privada no se puede leer)."
+          # Check the KEY password by re-importing the key into a temp keystore, which
+          # requires actually decrypting the private key with KEY_PASSWORD.
+          if ! keytool -importkeystore \
+                -srckeystore "$K" -srcstorepass "$KEYSTORE_PASSWORD" \
+                -srcalias "$KEY_ALIAS" -srckeypass "$KEY_PASSWORD" \
+                -destkeystore "$RUNNER_TEMP/check.keystore" \
+                -deststorepass check123 -destkeypass check123 \
+                -noprompt > /dev/null 2>&1; then
+            echo "::error::KEY_PASSWORD incorrecto para el alias '$KEY_ALIAS' (longitud=${#KEY_PASSWORD}). La clave privada no se puede desencriptar."
             echo "Aliases disponibles en el keystore:"
-            keytool -list -keystore "$K" -storepass "$KEYSTORE_PASSWORD" 2>/dev/null | grep -i alias || true
+            keytool -list -keystore "$K" -storepass "$KEYSTORE_PASSWORD" 2>/dev/null || true
             exit 1
           fi
+          rm -f "$RUNNER_TEMP/check.keystore"
           echo "::notice::KEY_PASSWORD OK"
 
       - name: Build signed release APK
