@@ -13,8 +13,10 @@ android {
         applicationId = "es.tortugaselectronicas.scrollfree"
         minSdk = 24
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        // CI overrides these via -PversionCode=... -PversionName=... so every
+        // GitHub Actions build gets a higher versionCode (required for auto-update).
+        versionCode = (project.findProperty("versionCode") as String?)?.toInt() ?: 1
+        versionName = (project.findProperty("versionName") as String?) ?: "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -24,12 +26,31 @@ android {
         }
     }
 
+    // Signing must be declared BEFORE buildTypes so the release build can reference it.
+    signingConfigs {
+        val keystorePath = System.getenv("KEYSTORE_FILE") ?: project.findProperty("KEYSTORE_FILE") as String?
+        if (keystorePath != null) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("KEYSTORE_PASSWORD")
+                    ?: project.findProperty("KEYSTORE_PASSWORD") as String?
+                keyAlias = System.getenv("KEY_ALIAS")
+                    ?: project.findProperty("KEY_ALIAS") as String?
+                keyPassword = System.getenv("KEY_PASSWORD")
+                    ?: project.findProperty("KEY_PASSWORD") as String?
+            }
+        }
+    }
+
     buildTypes {
         release {
             optimization {
                 enable = true
                 packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
             }
+            // Signed with a keystore provided by CI (GitHub Secrets). When it is absent
+            // (e.g. local debug builds) no signing config is applied.
+            signingConfig = signingConfigs.findByName("release")
         }
     }
     compileOptions {
@@ -39,6 +60,12 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    defaultConfig {
+        // GitHub repo the in-app updater polls for new releases.
+        buildConfigField("String", "UPDATE_REPO_OWNER", "\"Alfreditto\"")
+        buildConfigField("String", "UPDATE_REPO_NAME", "\"ScrollFree\"")
     }
     packaging {
         jniLibs {
@@ -73,6 +100,7 @@ dependencies {
     implementation(libs.youtubedl.android.aria2c)
 
     testImplementation(libs.junit)
+    testImplementation(libs.json.lib)
     testImplementation(libs.kotlinx.coroutines.android)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)

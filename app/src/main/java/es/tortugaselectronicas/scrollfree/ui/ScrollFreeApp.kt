@@ -20,6 +20,8 @@ import es.tortugaselectronicas.scrollfree.ui.photos.PhotoCarouselViewModel
 import es.tortugaselectronicas.scrollfree.ui.player.PlayerScreen
 import es.tortugaselectronicas.scrollfree.ui.player.PlayerViewModel
 import es.tortugaselectronicas.scrollfree.ui.player.SEEK_STEP_MS
+import es.tortugaselectronicas.scrollfree.update.UpdateDialogHost
+import es.tortugaselectronicas.scrollfree.update.UpdateViewModel
 import kotlinx.coroutines.flow.SharedFlow
 import java.io.File
 
@@ -39,6 +41,18 @@ fun ScrollFreeApp(
 ) {
     val navController = rememberNavController()
     val downloadViewModel: DownloadViewModel = viewModel()
+
+    // In-app updater: checks GitHub Releases once on start and drives install.
+    val updateViewModel: UpdateViewModel = viewModel()
+    val updateState by updateViewModel.state.collectAsState()
+    LaunchedEffect(Unit) { updateViewModel.checkOnce() }
+    UpdateDialogHost(
+        state = updateState,
+        onDownload = updateViewModel::download,
+        onInstall = updateViewModel::install,
+        onOpenPermissionSettings = updateViewModel::openPermissionSettings,
+        onDismiss = updateViewModel::dismiss
+    )
 
     // Forward links coming from ACTION_SEND / ACTION_VIEW into the download field.
     LaunchedEffect(Unit) {
