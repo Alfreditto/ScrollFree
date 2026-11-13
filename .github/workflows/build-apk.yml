@@ -88,21 +88,24 @@ jobs:
             exit 1
           fi
           echo "::notice::KEYSTORE_PASSWORD OK"
-          # Check the KEY password by re-importing the key into a temp keystore, which
-          # requires actually decrypting the private key with KEY_PASSWORD.
-          if ! keytool -importkeystore \
-                -srckeystore "$K" -srcstorepass "$KEYSTORE_PASSWORD" \
-                -srcalias "$KEY_ALIAS" -srckeypass "$KEY_PASSWORD" \
-                -destkeystore "$RUNNER_TEMP/check.keystore" \
-                -deststorepass check123 -destkeypass check123 \
-                -noprompt > /dev/null 2>&1; then
-            echo "::error::KEY_PASSWORD incorrecto para el alias '$KEY_ALIAS' (longitud=${#KEY_PASSWORD}). La clave privada no se puede desencriptar."
-            echo "Aliases disponibles en el keystore:"
-            keytool -list -keystore "$K" -storepass "$KEYSTORE_PASSWORD" 2>/dev/null || true
+          # PKCS12 keystores do not support a key password different from the store
+          # password. Enforce equality so we fail fast instead of hitting a cryptic
+          # BadPaddingException inside Gradle.
+          if [ "$KEY_PASSWORD" != "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::En un keystore PKCS12, KEY_PASSWORD debe ser IGUAL a KEYSTORE_PASSWORD (key=${#KEY_PASSWORD} vs store=${#KEYSTORE_PASSWORD})."
             exit 1
           fi
-          rm -f "$RUNNER_TEMP/check.keystore"
-          echo "::notice::KEY_PASSWORD OK"
+          echo "::notice::KEY_PASSWORD coincide con el store (PKCS12) OK"
+          # Finally, do a real signing round-trip to be 100% sure the key is usable.
+          TMPJAR="$RUNNER_TEMP/probe.jar"
+          echo "probe" > "$RUNNER_TEMP/probe.txt"
+          (cd "$RUNNER_TEMP" && jar cf "$TMPJAR" probe.txt)
+          if ! jarsigner -keystore "$K" -storepass "$KEYSTORE_PASSWORD" \
+                -keypass "$KEY_PASSWORD" "$TMPJAR" "$KEY_ALIAS" > /dev/null 2>&1; then
+            echo "::error::La firma de prueba con jarsigner fallo (alias/contrasena incorrectos)."
+            exit 1
+          fi
+          echo "::notice::Firma de prueba OK - el keystore es totalmente valido"
 
       - name: Build signed release APK
         env:
