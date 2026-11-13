@@ -157,21 +157,33 @@ fun HomeScreen(
 
 @Composable
 private fun UpdateBanner(info: UpdateInfo, onDismiss: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     Surface(
         color = MaterialTheme.colorScheme.primaryContainer,
         contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        onClick = {
+            // Open the latest release page in the browser.
+            runCatching {
+                context.startActivity(
+                    android.content.Intent(
+                        android.content.Intent.ACTION_VIEW,
+                        android.net.Uri.parse(info.releaseUrl)
+                    )
+                )
+            }
+        },
         modifier = Modifier.fillMaxWidth()
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(Icons.Filled.Refresh, contentDescription = null)
             Spacer(Modifier.size(12.dp))
             Text(
-                text = "Nueva versión ${info.versionName} disponible",
+                text = "Nueva versión ${info.versionName} disponible · Toca para actualizar",
                 style = MaterialTheme.typography.bodyMedium,
                 modifier = Modifier.weight(1f)
             )
