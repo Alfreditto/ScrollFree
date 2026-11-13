@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import es.tortugaselectronicas.scrollfree.data.DownloadResult
 import es.tortugaselectronicas.scrollfree.data.HistoryEntry
 import es.tortugaselectronicas.scrollfree.data.HistoryRepository
+import es.tortugaselectronicas.scrollfree.data.MediaKind
 import es.tortugaselectronicas.scrollfree.data.YtDlpManager
 import es.tortugaselectronicas.scrollfree.util.UrlUtils
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,7 +14,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import java.io.File
 
 /** Phase of the download flow surfaced to the UI. */
 sealed interface DownloadPhase {
@@ -21,7 +21,7 @@ sealed interface DownloadPhase {
 
     data class Working(val progress: Float, val stage: String) : DownloadPhase
 
-    data class Ready(val file: File) : DownloadPhase
+    data class Ready(val kind: MediaKind) : DownloadPhase
 
     data class Error(val message: String) : DownloadPhase
 }
@@ -109,7 +109,7 @@ class DownloadViewModel(application: Application) : AndroidViewModel(application
                 timestamp = System.currentTimeMillis()
             )
         )
-        _uiState.update { it.copy(phase = DownloadPhase.Ready(downloaded.file)) }
+        _uiState.update { it.copy(phase = DownloadPhase.Ready(downloaded.kind)) }
     }
 
     /** Called by the UI once navigation to the player has happened. */

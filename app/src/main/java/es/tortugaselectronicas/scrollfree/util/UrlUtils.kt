@@ -89,4 +89,31 @@ object UrlUtils {
             finalUrl
         }.getOrDefault(url)
     }
+
+    /**
+     * Removes tracking/query parameters that some sites append to shared links
+     * (`_r`, `_t`, `is_from_webapp`, `sender_device`, ...). yt-dlp and the sites'
+     * own extractors match cleaner on the canonical URL.
+     */
+    fun stripTrackingParams(url: String): String {
+        if (url.isBlank()) return url
+        return runCatching {
+            val uri = java.net.URI(url.trim())
+            val query = uri.rawQuery ?: return@runCatching url
+            val kept = query.split("&")
+                .filter { param ->
+                    val key = param.substringBefore('=').lowercase()
+                    key !in TRACKING_PARAMS && !key.startsWith("utm_")
+                }
+                .joinToString("&")
+            java.net.URI(
+                uri.scheme, uri.authority, uri.path, kept.ifBlank { null }, uri.fragment
+            ).toString()
+        }.getOrDefault(url)
+    }
+
+    private val TRACKING_PARAMS = setOf(
+        "_r", "_t", "_d", "is_from_webapp", "sender_device", "sender_web_id",
+        "web_id", "share_app_id", "share_link_id", "refer", "referer"
+    )
 }

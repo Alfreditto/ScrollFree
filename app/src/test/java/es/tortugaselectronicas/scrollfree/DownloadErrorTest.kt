@@ -7,12 +7,12 @@ import org.junit.Test
 class DownloadErrorTest {
 
     @Test
-    fun `tiktok photo post is reported as a photo carousel`() {
+    fun `unsupported url is reported clearly`() {
         val error = friendlyDownloadError(
             url = "https://www.tiktok.com/@user/photo/123456",
             rawError = "ERROR: Unsupported URL: https://www.tiktok.com/@user/photo/123456"
         )
-        assertTrue(error.message!!.contains("carrusel de fotos", ignoreCase = true))
+        assertTrue(error.message!!.contains("no reconoce", ignoreCase = true))
     }
 
     @Test

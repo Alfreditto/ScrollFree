@@ -11,14 +11,34 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 
-/**
- * Result of a successful download.
- *
- * @param file the merged output file (mp4 when possible).
- * @param title the human readable video title (used for the light history).
- */
-data class DownloadResult(val file: File, val title: String)
+/** What kind of media a link produced. */
+sealed interface MediaKind {
+    /** A single playable video file. */
+    data class Video(val file: File) : MediaKind
+
+    /**
+     * One or more still images (photo carousel), with an optional background audio track.
+     */
+    data class PhotoCarousel(val images: List<File>, val audio: File?) : MediaKind
+}
+
+/** Result of a successful download. */
+data class DownloadResult(
+    val kind: MediaKind,
+    val title: String
+) {
+    /** A representative file for simple existence checks / history. */
+    val primaryFile: File
+        get() = when (kind) {
+            is MediaKind.Video -> kind.file
+            is MediaKind.PhotoCarousel -> kind.images.firstOrNull()
+                ?: kind.audio
+                ?: throw IllegalStateException("Sin archivos descargados")
+        }
+}
 
 /**
  * User-facing download failure with a friendly message.
@@ -31,21 +51,18 @@ class DownloadException(
 /**
  * Translates raw yt-dlp stderr into a friendly Spanish message that guides the user.
  */
+@Suppress("UNUSED_PARAMETER")
 internal fun friendlyDownloadError(url: String, rawError: String): DownloadException {
     val lower = rawError.lowercase()
     val userMessage = when {
-        isPhotoPost(url) ->
-            "Este enlace es un carrusel de fotos, no un vídeo. yt-dlp no puede descargarlo."
-
         "unsupported url" in lower ->
-            "yt-dlp no reconoce este enlace (puede ser una foto/carrusel o un enlace no soportado). " +
-                "Prueba a actualizar el extractor."
+            "yt-dlp no reconoce este enlace. Prueba a actualizar el extractor o revisa la URL."
 
         "private" in lower || "login" in lower || "sign in" in lower ->
             "El vídeo es privado o requiere iniciar sesión, así que no se puede descargar."
 
         "unavailable" in lower || "not available" in lower ->
-            "El vídeo no está disponible (puede estar borrado o bloqueado por región)."
+            "El contenido no está disponible (puede estar borrado o bloqueado por región)."
 
         "http error 403" in lower || "forbidden" in lower ->
             "El servidor rechazó la descarga (403). Prueba a actualizar el extractor."
@@ -55,13 +72,12 @@ internal fun friendlyDownloadError(url: String, rawError: String): DownloadExcep
             "Fallo de conexión. Comprueba tu red e inténtalo de nuevo."
 
         else ->
-            "No se pudo descargar. Si el enlace es una foto o carrusel, no se puede " +
-                "descargar como vídeo. Si no, actualiza el extractor o revisa el enlace."
+            "No se pudo descargar. Actualiza el extractor o revisa el enlace."
     }
     return DownloadException(userMessage, rawError)
 }
 
-private fun isPhotoPost(url: String): Boolean = "/photo/" in url.lowercase()
+private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "heic", "avif")
 
 /**
  * Wrapper around the youtubedl-android library (junkfood02 fork, yt-dlp based).
@@ -72,7 +88,10 @@ private fun isPhotoPost(url: String): Boolean = "/photo/" in url.lowercase()
  *  - `--no-mtime`, `--restrict-filenames`, `--no-playlist`, explicit `-P` path
  *  - the final file path is printed via `--print after_move:filepath`
  *
- * Videos are written to `cacheDir/videos` so they can be safely wiped when the app
+ * Photo posts (TikTok/Instagram carousels) are supported too: the images are
+ * downloaded as-is and the background audio track is fetched separately.
+ *
+ * Media is written to `cacheDir/videos` so it can be safely wiped when the app
  * is closed / re-opened without touching user data.
  */
 object YtDlpManager {
@@ -96,7 +115,7 @@ object YtDlpManager {
         }
     }
 
-    /** Directory where downloaded videos live (cache, wipeable). */
+    /** Directory where downloaded media lives (cache, wipeable). */
     fun videosDir(context: Context): File =
         File(context.cacheDir, "videos").apply { if (!exists()) mkdirs() }
 
@@ -121,7 +140,8 @@ object YtDlpManager {
     }
 
     /**
-     * Downloads [url] to [videosDir] and reports progress in the 0f..1f range.
+     * Downloads whatever [url] points to: a video, or a photo carousel (one or more
+     * images with optional background audio).
      */
     suspend fun download(
         context: Context,
@@ -133,64 +153,221 @@ object YtDlpManager {
             init(context)
             cleanupPartialFiles(context)
 
-            // Resolve short links (vm.tiktok.com/x) to their canonical URL so we can
-            // report accurate errors (e.g. photo carousels).
-            val resolvedUrl = UrlUtils.resolveRedirect(url)
-            if (isPhotoPost(resolvedUrl)) {
-                throw friendlyDownloadError(resolvedUrl, "photo carousel")
-            }
+            // Resolve short links (vm.tiktok.com/x) to their canonical URL, then strip
+            // tracking params that can confuse the site extractor.
+            val resolvedUrl = UrlUtils.stripTrackingParams(UrlUtils.resolveRedirect(url))
 
-            val outputDir = videosDir(context)
-            val outputTemplate = File(outputDir, "%(title).140B-%(id)s.%(ext)s").absolutePath
-
-            val request = YoutubeDLRequest(resolvedUrl).apply {
-                // Best muxed stream, fall back to best single file (Seal's default).
-                addOption("-f", "bv*+ba/b")
-                addOption("--merge-output-format", "mp4")
-                addOption("--no-playlist")
-                addOption("--restrict-filenames")
-                addOption("--no-mtime")
-                // Explicit destination folder + file template.
-                addOption("-P", outputDir.absolutePath)
-                addOption("-o", outputTemplate)
-                // Emit the final path so we can locate the produced file reliably.
-                addOption("--print", "after_move:filepath")
-                if (useAria2c) {
-                    // External downloader bundled with youtubedl-android.
-                    addOption("--downloader", "libaria2c.so")
-                }
-            }
-
-            val response = try {
-                YoutubeDL.getInstance().execute(request, null) { progress, _, _ ->
-                    onProgress(progress.coerceIn(0f, 1f))
-                }
+            // Inspect the media first to decide video vs. photo carousel.
+            val info = try {
+                YoutubeDL.getInstance().getInfo(resolvedUrl)
             } catch (e: Exception) {
+                // yt-dlp often fails to match TikTok photo URLs. Fall back to scraping
+                // the page HTML to recover the carousel images + audio.
+                val fallback = downloadTikTokPhotoFallback(context, resolvedUrl, onProgress)
+                if (fallback != null) return@runCatching fallback
                 throw friendlyDownloadError(resolvedUrl, e.message ?: "")
             }
 
-            val producedPath = response.out
-                .lineSequence()
-                .map { it.trim() }
-                .lastOrNull { it.isNotEmpty() && File(it).isFile }
-                ?: throw friendlyDownloadError(resolvedUrl, response.err)
+            val title = info.title?.takeIf { it.isNotBlank() }
+                ?: info.id?.let { "Contenido $it" }
+                ?: "Contenido"
 
-            val file = File(producedPath)
-            val title = resolveTitle(resolvedUrl, file)
-            DownloadResult(file = file, title = title)
+            // Image carousels (TikTok/Instagram photo posts) surface each slide as a
+            // format whose extension is an image type. Distinguish them from the
+            // audio-only track (which has an audio ext) and from videos.
+            val imageFormats = info.formats
+                ?.filter { fmt ->
+                    val ext = fmt.ext?.lowercase()
+                    fmt.url != null && ext in IMAGE_EXTENSIONS
+                }
+                ?.distinctBy { it.url }
+                .orEmpty()
+
+            if (imageFormats.isNotEmpty()) {
+                downloadCarousel(context, title, imageFormats, info, onProgress)
+            } else {
+                downloadVideo(context, resolvedUrl, title, useAria2c, onProgress)
+            }
         }
     }
 
     /**
-     * Best-effort title resolution: try yt-dlp metadata, fall back to the file name.
+     * Fallback for TikTok photo posts, which bundled yt-dlp builds often fail to match.
+     * Scrapes the post page for the carousel image URLs and background audio, then
+     * downloads them directly. Returns null when this URL is not a TikTok photo post or
+     * scraping fails, so callers can fall through to the normal error.
      */
-    private fun resolveTitle(url: String, file: File): String {
-        val fromMetadata = runCatching {
-            YoutubeDL.getInstance().getInfo(url).title
-        }.getOrNull()
-        return fromMetadata?.takeIf { it.isNotBlank() }
-            ?: file.nameWithoutExtension.ifBlank { "Vídeo" }
+    private fun downloadTikTokPhotoFallback(
+        context: Context,
+        url: String,
+        onProgress: (Float) -> Unit
+    ): DownloadResult? {
+        if (!TikTokPhotoScraper.isTikTokPhotoUrl(url)) return null
+        val result = TikTokPhotoScraper.scrape(url) ?: return null
+
+        val dir = videosDir(context)
+        val rawTitle = result.title?.takeIf { it.isNotBlank() } ?: "carrusel"
+        val baseName = sanitizeFileName(rawTitle).take(80).ifBlank { "carrusel" }
+        val total = result.images.size + (if (result.audio != null) 1 else 0)
+        var done = 0
+
+        val images = ArrayList<File>()
+        result.images.forEachIndexed { index, imageUrl ->
+            val target = File(dir, "${baseName}_${index + 1}.jpg")
+            runCatching { downloadDirect(imageUrl, target, null) }
+                .onSuccess {
+                    images.add(target)
+                    done++
+                    onProgress((done.toFloat() / total).coerceIn(0f, 1f))
+                }
+        }
+
+        val audioFile = result.audio?.let { audioUrl ->
+            val target = File(dir, "${baseName}_audio.m4a")
+            runCatching {
+                downloadDirect(audioUrl, target, null)
+                done++
+                onProgress(1f)
+                target.takeIf { it.length() > 0 }
+            }.getOrNull()
+        }
+
+        if (images.isEmpty()) return null
+
+        return DownloadResult(
+            kind = MediaKind.PhotoCarousel(images = images, audio = audioFile),
+            title = rawTitle
+        )
     }
+
+    /** Downloads a normal video with yt-dlp and returns the produced file. */
+    private fun downloadVideo(
+        context: Context,
+        resolvedUrl: String,
+        title: String,
+        useAria2c: Boolean,
+        onProgress: (Float) -> Unit
+    ): DownloadResult {
+        val outputDir = videosDir(context)
+        val outputTemplate = File(outputDir, "%(title).140B-%(id)s.%(ext)s").absolutePath
+
+        val request = YoutubeDLRequest(resolvedUrl).apply {
+            addOption("-f", "bv*+ba/b")
+            addOption("--merge-output-format", "mp4")
+            addOption("--no-playlist")
+            addOption("--restrict-filenames")
+            addOption("--no-mtime")
+            addOption("-P", outputDir.absolutePath)
+            addOption("-o", outputTemplate)
+            addOption("--print", "after_move:filepath")
+            if (useAria2c) addOption("--downloader", "libaria2c.so")
+        }
+
+        val response = try {
+            YoutubeDL.getInstance().execute(request, null) { progress, _, _ ->
+                onProgress(progress.coerceIn(0f, 1f))
+            }
+        } catch (e: Exception) {
+            throw friendlyDownloadError(resolvedUrl, e.message ?: "")
+        }
+
+        val producedPath = response.out
+            .lineSequence()
+            .map { it.trim() }
+            .lastOrNull { it.isNotEmpty() && File(it).isFile }
+            ?: throw friendlyDownloadError(resolvedUrl, response.err)
+
+        return DownloadResult(kind = MediaKind.Video(File(producedPath)), title = title)
+    }
+
+    /**
+     * Downloads every carousel image plus (if available) the background audio track.
+     */
+    private fun downloadCarousel(
+        context: Context,
+        title: String,
+        imageFormats: List<com.yausername.youtubedl_android.mapper.VideoFormat>,
+        info: com.yausername.youtubedl_android.mapper.VideoInfo,
+        onProgress: (Float) -> Unit
+    ): DownloadResult {
+        val dir = videosDir(context)
+        val baseName = sanitizeFileName(title).take(80).ifBlank { "carrusel" }
+
+        val images = ArrayList<File>()
+        imageFormats.forEachIndexed { index, fmt ->
+            val url = fmt.url ?: return@forEachIndexed
+            val ext = fmt.ext?.lowercase() ?: "jpg"
+            val target = File(dir, "${baseName}_${index + 1}.$ext")
+            downloadDirect(url, target, fmt.httpHeaders)
+            images.add(target)
+            onProgress(((index + 1).toFloat() / (imageFormats.size + 1)).coerceIn(0f, 1f))
+        }
+
+        // Background audio (music) is usually exposed as an audio-only format.
+        val audioFormat = info.formats
+            ?.filter { it.acodec != null && it.acodec != "none" && it.url != null }
+            ?.maxByOrNull { it.abr }
+        val audioFile = audioFormat?.url?.let { audioUrl ->
+            val ext = audioFormat.ext?.lowercase() ?: "m4a"
+            val target = File(dir, "${baseName}_audio.$ext")
+            runCatching {
+                downloadDirect(audioUrl, target, audioFormat.httpHeaders)
+                target.takeIf { it.length() > 0 }
+            }.getOrNull()
+        }
+
+        if (images.isEmpty()) {
+            throw DownloadException(
+                "No se pudieron descargar las imágenes de este post.",
+                "no images downloaded"
+            )
+        }
+
+        onProgress(1f)
+        return DownloadResult(
+            kind = MediaKind.PhotoCarousel(images = images, audio = audioFile),
+            title = title
+        )
+    }
+
+    /** Downloads a direct media URL to [target] via a plain HTTP request. */
+    private fun downloadDirect(
+        url: String,
+        target: File,
+        headers: Map<String, String>?
+    ) {
+        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15_000
+            readTimeout = 30_000
+            instanceFollowRedirects = true
+            setRequestProperty(
+                "User-Agent",
+                headers?.get("User-Agent")
+                    ?: ("Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 " +
+                        "(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36")
+            )
+            headers?.forEach { (key, value) ->
+                if (!key.equals("User-Agent", ignoreCase = true)) {
+                    setRequestProperty(key, value)
+                }
+            }
+        }
+        try {
+            connection.connect()
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                throw DownloadException("El servidor respondió $code al descargar la imagen.", "http $code")
+            }
+            connection.inputStream.use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun sanitizeFileName(name: String): String =
+        name.replace(Regex("[^A-Za-z0-9._-]+"), "_").trim('_')
 
     /** Deletes files left behind by a previous failed/partial download. */
     private fun cleanupPartialFiles(context: Context) {
@@ -201,7 +378,7 @@ object YtDlpManager {
         }
     }
 
-    /** Deletes every downloaded video. Called on app start/stop. */
+    /** Deletes every downloaded media file. Called on app start/stop. */
     fun clearVideoCache(context: Context) {
         runCatching {
             videosDir(context).listFiles()?.forEach { it.delete() }
