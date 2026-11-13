@@ -29,6 +29,23 @@
 -keep class com.yausername.youtubedl_android.mapper.** { *; }
 
 # ---------------------------------------------------------------------------
+# Apache Commons Compress / IO
+# youtubedl-android's ZipUtils uses commons-compress (ZipFile, ZipArchiveInputStream)
+# and commons-io (IOUtils). R8 was merging/renaming their internals, which made
+# their static initializers throw ExceptionInInitializerError at runtime.
+# ---------------------------------------------------------------------------
+-keep class org.apache.commons.compress.** { *; }
+-keep class org.apache.commons.io.** { *; }
+-keep interface org.apache.commons.compress.** { *; }
+-keep enum org.apache.commons.compress.** { *; }
+-keepclassmembers enum org.apache.commons.compress.** { *; }
+-keepclassmembers class org.apache.commons.compress.** { *; }
+-keeppackagenames org.apache.commons.compress.**
+-dontwarn org.apache.commons.compress.**
+-dontwarn org.apache.commons.io.**
+
+
+# ---------------------------------------------------------------------------
 # Media3 / ExoPlayer
 # ---------------------------------------------------------------------------
 -keep class androidx.media3.** { *; }
