@@ -23,7 +23,24 @@ sealed interface MediaKind {
      * One or more still images (photo carousel), with an optional background audio track.
      */
     data class PhotoCarousel(val images: List<File>, val audio: File?) : MediaKind
+
+    /**
+     * A tweet: author, text and attached media (images and/or videos).
+     */
+    data class Tweet(
+        val displayName: String?,
+        val handle: String?,
+        val text: String?,
+        val items: List<TweetMedia>
+    ) : MediaKind
 }
+
+/** A single media item of a tweet (image or video). */
+data class TweetMedia(
+    val isVideo: Boolean,
+    /** Local file after download (both images and videos are stored locally). */
+    val file: File
+)
 
 /** Result of a successful download. */
 data class DownloadResult(
@@ -36,6 +53,8 @@ data class DownloadResult(
             is MediaKind.Video -> kind.file
             is MediaKind.PhotoCarousel -> kind.images.firstOrNull()
                 ?: kind.audio
+                ?: throw IllegalStateException("Sin archivos descargados")
+            is MediaKind.Tweet -> kind.items.firstOrNull()?.file
                 ?: throw IllegalStateException("Sin archivos descargados")
         }
 }
@@ -78,6 +97,13 @@ internal fun friendlyDownloadError(url: String, rawError: String): DownloadExcep
 }
 
 private val IMAGE_EXTENSIONS = setOf("jpg", "jpeg", "png", "webp", "heic", "avif")
+
+/** Headers needed to fetch pbs.twimg.com images (they reject bare requests). */
+private val TWITTER_IMAGE_HEADERS = mapOf(
+    "Referer" to "https://twitter.com/",
+    "User-Agent" to "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
+)
 
 /**
  * Wrapper around the youtubedl-android library (junkfood02 fork, yt-dlp based).
@@ -156,6 +182,12 @@ object YtDlpManager {
             // Resolve short links (vm.tiktok.com/x) to their canonical URL, then strip
             // tracking params that can confuse the site extractor.
             val resolvedUrl = UrlUtils.stripTrackingParams(UrlUtils.resolveRedirect(url))
+
+            // Twitter/X: build a rich "tweet" view (author, text, cascading media).
+            if (TwitterPostScraper.isTwitterUrl(resolvedUrl)) {
+                val tweetResult = downloadTweet(context, resolvedUrl, onProgress)
+                if (tweetResult != null) return@runCatching tweetResult
+            }
 
             // Inspect the media first to decide video vs. photo carousel.
             val info = try {
@@ -236,6 +268,78 @@ object YtDlpManager {
 
         return DownloadResult(
             kind = MediaKind.PhotoCarousel(images = images, audio = audioFile),
+            title = rawTitle
+        )
+    }
+
+    /**
+     * Downloads a tweet's media (images and videos) and returns a rich [MediaKind.Tweet].
+     * Returns null when the URL is not a parseable tweet, so the caller can fall back.
+     */
+    private fun downloadTweet(
+        context: Context,
+        url: String,
+        onProgress: (Float) -> Unit
+    ): DownloadResult? {
+        // 1) yt-dlp handles tweets WITH video (author, text, photos+video).
+        val tweet = TwitterPostScraper.fetchInfo(url)
+
+        // 2) Fallback for photo-only tweets: scrape the tweet page for text + images.
+        val remoteImages: List<String>
+        val remoteVideos: List<String>
+        val displayName: String?
+        val handle: String?
+        val text: String?
+        if (tweet != null && tweet.media.isNotEmpty()) {
+            displayName = tweet.displayName
+            handle = tweet.handle
+            text = tweet.text
+            remoteImages = tweet.media.filter { it.kind == TwitterPostScraper.Media.Kind.IMAGE }.map { it.url }
+            remoteVideos = tweet.media.filter { it.kind == TwitterPostScraper.Media.Kind.VIDEO }.map { it.url }
+        } else {
+            val scraped = TwitterPageScraper.scrape(url) ?: return null
+            displayName = scraped.displayName
+            handle = scraped.handle
+            text = scraped.text
+            remoteImages = scraped.imageUrls
+            remoteVideos = scraped.videoUrls
+        }
+
+        if (remoteImages.isEmpty() && remoteVideos.isEmpty()) return null
+
+        val dir = videosDir(context)
+        val rawTitle = text?.takeIf { it.isNotBlank() } ?: "tweet"
+        val baseName = sanitizeFileName(rawTitle).take(60).ifBlank { "tweet" }
+        val total = remoteImages.size + remoteVideos.size
+        var done = 0
+
+        val items = ArrayList<TweetMedia>()
+        remoteImages.forEachIndexed { index, imageUrl ->
+            val target = File(dir, "${baseName}_img${index + 1}.jpg")
+            runCatching { downloadDirect(imageUrl, target, TWITTER_IMAGE_HEADERS) }
+                .onSuccess { items.add(TweetMedia(isVideo = false, file = target)) }
+                .onFailure { android.util.Log.e("Twitter", "img$index failed: ${it.message}") }
+            done++
+            onProgress((done.toFloat() / total).coerceIn(0f, 1f))
+        }
+        remoteVideos.forEachIndexed { index, videoUrl ->
+            val target = File(dir, "${baseName}_vid${index + 1}.mp4")
+            runCatching { downloadDirect(videoUrl, target, null) }
+                .onSuccess { items.add(TweetMedia(isVideo = true, file = target)) }
+                .onFailure { android.util.Log.e("Twitter", "vid$index failed: ${it.message}") }
+            done++
+            onProgress((done.toFloat() / total).coerceIn(0f, 1f))
+        }
+
+        if (items.isEmpty()) return null
+
+        return DownloadResult(
+            kind = MediaKind.Tweet(
+                displayName = displayName,
+                handle = handle,
+                text = text,
+                items = items
+            ),
             title = rawTitle
         )
     }

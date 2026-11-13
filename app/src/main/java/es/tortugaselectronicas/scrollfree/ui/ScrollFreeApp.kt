@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -20,6 +21,7 @@ import es.tortugaselectronicas.scrollfree.ui.photos.PhotoCarouselViewModel
 import es.tortugaselectronicas.scrollfree.ui.player.PlayerScreen
 import es.tortugaselectronicas.scrollfree.ui.player.PlayerViewModel
 import es.tortugaselectronicas.scrollfree.ui.player.SEEK_STEP_MS
+import es.tortugaselectronicas.scrollfree.ui.tweet.TweetScreen
 import es.tortugaselectronicas.scrollfree.update.UpdateViewModel
 import kotlinx.coroutines.flow.SharedFlow
 import java.io.File
@@ -29,6 +31,7 @@ object Routes {
     const val HISTORY = "history"
     const val PLAYER = "player"
     const val PHOTOS = "photos"
+    const val TWEET = "tweet"
     const val ARG_PATH = "path"
     const val PLAYER_ROUTE = "$PLAYER?$ARG_PATH={$ARG_PATH}"
     const val PHOTOS_ROUTE = "$PHOTOS?$ARG_PATH={$ARG_PATH}"
@@ -58,6 +61,11 @@ fun ScrollFreeApp(
     }
 
     val downloadState by downloadViewModel.uiState.collectAsState()
+
+    // Holds the tweet being displayed (text + files) between Home and TweetScreen.
+    var downloadedTweet by androidx.compose.runtime.remember {
+        androidx.compose.runtime.mutableStateOf<MediaKind.Tweet?>(null)
+    }
 
     NavHost(navController = navController, startDestination = Routes.HOME) {
         composable(Routes.HOME) {
@@ -90,6 +98,13 @@ fun ScrollFreeApp(
                             }.joinToString("|") { it.absolutePath }
                             val encoded = android.net.Uri.encode(files)
                             navController.navigate("${Routes.PHOTOS}?${Routes.ARG_PATH}=$encoded")
+                        }
+
+                        is MediaKind.Tweet -> {
+                            // Tweets carry text + many files; keep them in the VM and
+                            // navigate with just the route.
+                            downloadedTweet = kind
+                            navController.navigate(Routes.TWEET)
                         }
                     }
                     downloadViewModel.onPlayerConsumed()
@@ -172,6 +187,23 @@ fun ScrollFreeApp(
                 onTogglePlayPause = carouselViewModel::togglePlayPause,
                 onPageSelected = carouselViewModel::goTo
             )
+        }
+
+        composable(Routes.TWEET) {
+            val tweet = downloadedTweet
+            if (tweet == null) {
+                // Nothing to show (e.g. process death) – bounce back home.
+                LaunchedEffect(Unit) { navController.popBackStack() }
+            } else {
+                TweetScreen(
+                    tweet = tweet,
+                    onBack = { navController.popBackStack() },
+                    onOpenVideo = { file ->
+                        val encoded = android.net.Uri.encode(file.absolutePath)
+                        navController.navigate("${Routes.PLAYER}?${Routes.ARG_PATH}=$encoded")
+                    }
+                )
+            }
         }
     }
 }
