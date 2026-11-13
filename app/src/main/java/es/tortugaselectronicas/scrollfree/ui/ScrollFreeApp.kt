@@ -12,6 +12,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import es.tortugaselectronicas.scrollfree.data.MediaKind
+import es.tortugaselectronicas.scrollfree.ui.about.AboutScreen
 import es.tortugaselectronicas.scrollfree.ui.history.HistoryScreen
 import es.tortugaselectronicas.scrollfree.ui.home.DownloadPhase
 import es.tortugaselectronicas.scrollfree.ui.home.DownloadViewModel
@@ -29,6 +30,7 @@ import java.io.File
 object Routes {
     const val HOME = "home"
     const val HISTORY = "history"
+    const val ABOUT = "about"
     const val PLAYER = "player"
     const val PHOTOS = "photos"
     const val TWEET = "tweet"
@@ -77,7 +79,11 @@ fun ScrollFreeApp(
                 onUpdateExtractor = downloadViewModel::onUpdateExtractor,
                 onSnackbarConsumed = downloadViewModel::onSnackbarConsumed,
                 updateAvailable = updateAvailable,
-                onDismissUpdate = updateViewModel::dismiss
+                onDismissUpdate = updateViewModel::dismiss,
+                onOpenAbout = {
+                    updateViewModel.resetManualCheck()
+                    navController.navigate(Routes.ABOUT)
+                }
             )
 
             // Navigate to the right screen as soon as a download completes.
@@ -117,6 +123,26 @@ fun ScrollFreeApp(
                 entries = downloadState.history,
                 onBack = { navController.popBackStack() },
                 onClearHistory = downloadViewModel::onClearHistory
+            )
+        }
+
+        composable(Routes.ABOUT) {
+            val manualCheck by updateViewModel.manualCheck.collectAsState()
+            val context = androidx.compose.ui.platform.LocalContext.current
+            AboutScreen(
+                manualCheck = manualCheck,
+                onBack = { navController.popBackStack() },
+                onCheckUpdates = updateViewModel::checkNow,
+                onOpenRelease = { url ->
+                    runCatching {
+                        context.startActivity(
+                            android.content.Intent(
+                                android.content.Intent.ACTION_VIEW,
+                                android.net.Uri.parse(url)
+                            )
+                        )
+                    }
+                }
             )
         }
 
