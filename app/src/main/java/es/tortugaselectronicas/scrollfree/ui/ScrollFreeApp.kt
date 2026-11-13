@@ -1,5 +1,10 @@
 package es.tortugaselectronicas.scrollfree.ui
 
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -26,6 +31,9 @@ import es.tortugaselectronicas.scrollfree.ui.tweet.TweetScreen
 import es.tortugaselectronicas.scrollfree.update.UpdateViewModel
 import kotlinx.coroutines.flow.SharedFlow
 import java.io.File
+
+/** Duration of the navigation fade used by the NavHost defaults. */
+private const val SLIDE_MS = 220
 
 object Routes {
     const val HOME = "home"
@@ -69,7 +77,16 @@ fun ScrollFreeApp(
         androidx.compose.runtime.mutableStateOf<MediaKind.Tweet?>(null)
     }
 
-    NavHost(navController = navController, startDestination = Routes.HOME) {
+    NavHost(
+        navController = navController,
+        startDestination = Routes.HOME,
+        // Natural, Material-style transitions: a quick fade for the immersive
+        // full-screen media screens and a subtle slide for secondary pages.
+        enterTransition = { fadeIn(tween(SLIDE_MS)) },
+        exitTransition = { fadeOut(tween(SLIDE_MS)) },
+        popEnterTransition = { fadeIn(tween(SLIDE_MS)) },
+        popExitTransition = { fadeOut(tween(SLIDE_MS)) }
+    ) {
         composable(Routes.HOME) {
             HomeScreen(
                 state = downloadState,
@@ -118,7 +135,13 @@ fun ScrollFreeApp(
             }
         }
 
-        composable(Routes.HISTORY) {
+        composable(
+            Routes.HISTORY,
+            enterTransition = { slideInHorizontally(tween(SLIDE_MS)) { it } + fadeIn(tween(SLIDE_MS)) },
+            exitTransition = { fadeOut(tween(SLIDE_MS)) },
+            popEnterTransition = { fadeIn(tween(SLIDE_MS)) },
+            popExitTransition = { slideOutHorizontally(tween(SLIDE_MS)) { it } + fadeOut(tween(SLIDE_MS)) }
+        ) {
             HistoryScreen(
                 entries = downloadState.history,
                 onBack = { navController.popBackStack() },
@@ -126,7 +149,13 @@ fun ScrollFreeApp(
             )
         }
 
-        composable(Routes.ABOUT) {
+        composable(
+            Routes.ABOUT,
+            enterTransition = { slideInHorizontally(tween(SLIDE_MS)) { it } + fadeIn(tween(SLIDE_MS)) },
+            exitTransition = { fadeOut(tween(SLIDE_MS)) },
+            popEnterTransition = { fadeIn(tween(SLIDE_MS)) },
+            popExitTransition = { slideOutHorizontally(tween(SLIDE_MS)) { it } + fadeOut(tween(SLIDE_MS)) }
+        ) {
             val manualCheck by updateViewModel.manualCheck.collectAsState()
             val context = androidx.compose.ui.platform.LocalContext.current
             AboutScreen(
