@@ -20,7 +20,6 @@ import es.tortugaselectronicas.scrollfree.ui.photos.PhotoCarouselViewModel
 import es.tortugaselectronicas.scrollfree.ui.player.PlayerScreen
 import es.tortugaselectronicas.scrollfree.ui.player.PlayerViewModel
 import es.tortugaselectronicas.scrollfree.ui.player.SEEK_STEP_MS
-import es.tortugaselectronicas.scrollfree.update.UpdateDialogHost
 import es.tortugaselectronicas.scrollfree.update.UpdateViewModel
 import kotlinx.coroutines.flow.SharedFlow
 import java.io.File
@@ -42,17 +41,10 @@ fun ScrollFreeApp(
     val navController = rememberNavController()
     val downloadViewModel: DownloadViewModel = viewModel()
 
-    // In-app updater: checks GitHub Releases once on start and drives install.
+    // Checks GitHub Releases once on start; only drives an "update available" banner.
     val updateViewModel: UpdateViewModel = viewModel()
-    val updateState by updateViewModel.state.collectAsState()
+    val updateAvailable by updateViewModel.available.collectAsState()
     LaunchedEffect(Unit) { updateViewModel.checkOnce() }
-    UpdateDialogHost(
-        state = updateState,
-        onDownload = updateViewModel::download,
-        onInstall = updateViewModel::install,
-        onOpenPermissionSettings = updateViewModel::openPermissionSettings,
-        onDismiss = updateViewModel::dismiss
-    )
 
     // Forward links coming from ACTION_SEND / ACTION_VIEW into the download field.
     LaunchedEffect(Unit) {
@@ -75,7 +67,9 @@ fun ScrollFreeApp(
                 onDownloadClick = downloadViewModel::onDownloadClick,
                 onOpenHistory = { navController.navigate(Routes.HISTORY) },
                 onUpdateExtractor = downloadViewModel::onUpdateExtractor,
-                onSnackbarConsumed = downloadViewModel::onSnackbarConsumed
+                onSnackbarConsumed = downloadViewModel::onSnackbarConsumed,
+                updateAvailable = updateAvailable,
+                onDismissUpdate = updateViewModel::dismiss
             )
 
             // Navigate to the right screen as soon as a download completes.

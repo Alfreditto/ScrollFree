@@ -26,50 +26,35 @@ class UpdateManagerTest {
     }
 
     @Test
-    fun `parses a release json with apk asset`() {
+    fun `parses a release json`() {
         val json = JSONObject(
             """
             {
               "tag_name": "v1.0.42",
               "body": "- versionCode: 142",
-              "assets": [
-                {"name": "notes.txt", "browser_download_url": "https://x/notes.txt"},
-                {"name": "ScrollFree.apk", "browser_download_url": "https://x/app.apk"}
-              ]
+              "html_url": "https://github.com/x/y/releases/tag/v1.0.42"
             }
             """.trimIndent()
         )
         val info = UpdateManager.parseRelease(json)!!
         assertEquals("1.0.42", info.versionName)
         assertEquals(142, info.versionCode)
-        assertEquals("https://x/app.apk", info.apkUrl)
-        assertTrue(info.notes!!.contains("versionCode"))
+        assertTrue(info.releaseUrl.contains("v1.0.42"))
     }
 
     @Test
     fun `falls back to tag for versionCode when body has none`() {
         val json = JSONObject(
             """
-            {
-              "tag_name": "v1.0.77",
-              "body": "",
-              "assets": [
-                {"name": "app.apk", "browser_download_url": "https://x/app.apk"}
-              ]
-            }
+            {"tag_name": "v1.0.77", "body": "", "html_url": "https://github.com/x/y/releases/tag/v1.0.77"}
             """.trimIndent()
         )
         assertEquals(77, UpdateManager.parseRelease(json)!!.versionCode)
     }
 
     @Test
-    fun `returns null when no apk asset`() {
-        val json = JSONObject(
-            """
-            {"tag_name": "v1.0.5", "body": "versionCode: 5",
-             "assets": [{"name": "readme.md", "browser_download_url": "https://x/r.md"}]}
-            """.trimIndent()
-        )
+    fun `returns null when version cannot be determined`() {
+        val json = JSONObject("""{"tag_name": "sin-numero", "body": ""}""")
         assertNull(UpdateManager.parseRelease(json))
     }
 }

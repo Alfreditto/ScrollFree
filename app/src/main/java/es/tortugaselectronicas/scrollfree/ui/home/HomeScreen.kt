@@ -26,7 +26,9 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,6 +43,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import es.tortugaselectronicas.scrollfree.ui.theme.ScrollFreeTheme
+import es.tortugaselectronicas.scrollfree.update.UpdateInfo
 import kotlinx.coroutines.delay
 import kotlin.time.Duration.Companion.milliseconds
 
@@ -53,7 +56,9 @@ fun HomeScreen(
     onOpenHistory: () -> Unit,
     onUpdateExtractor: () -> Unit,
     onSnackbarConsumed: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    updateAvailable: UpdateInfo? = null,
+    onDismissUpdate: () -> Unit = {}
 ) {
     val snackbarHostState = remember { SnackbarHostState() }
 
@@ -82,10 +87,17 @@ fun HomeScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(24.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            if (updateAvailable != null) {
+                UpdateBanner(info = updateAvailable, onDismiss = onDismissUpdate)
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
             Text(
                 text = "Pega un enlace para descargarlo y verlo aquí",
                 style = MaterialTheme.typography.titleMedium
@@ -137,6 +149,34 @@ fun HomeScreen(
                 }
                 Spacer(Modifier.size(8.dp))
                 Text("Actualizar extractor (yt-dlp)")
+            }
+            }
+        }
+    }
+}
+
+@Composable
+private fun UpdateBanner(info: UpdateInfo, onDismiss: () -> Unit) {
+    Surface(
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(Icons.Filled.Refresh, contentDescription = null)
+            Spacer(Modifier.size(12.dp))
+            Text(
+                text = "Nueva versión ${info.versionName} disponible",
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(onClick = onDismiss) {
+                Text("Cerrar")
             }
         }
     }

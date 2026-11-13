@@ -1,11 +1,9 @@
 package es.tortugaselectronicas.scrollfree.update
 
-import android.content.Context
 import es.tortugaselectronicas.scrollfree.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 
@@ -13,70 +11,52 @@ import java.net.URL
 data class UpdateInfo(
     val versionName: String,
     val versionCode: Int,
-    val apkUrl: String,
-    val notes: String?
+    val releaseUrl: String
 )
 
 /**
- * Checks GitHub Releases for a newer build of the app.
+ * Checks GitHub Releases to know whether a newer build exists.
  *
- * The release workflow publishes each build as a GitHub Release tagged
- * `v<versionName>` with the signed APK attached, so the newest release is the
- * update candidate. We compare its `versionCode` (embedded in the release body /
- * tag) against [BuildConfig.VERSION_CODE].
+ * ScrollFree does NOT download or install anything: it only reports availability so the
+ * UI can show a banner. Users update through their store (e.g. F-Droid) or the release
+ * page.
  */
 object UpdateManager {
 
     private const val TIMEOUT_MS = 15_000
 
-    /** Returns the newest available update, or null when we are already up to date. */
+    /** Returns the newest available update, or null when up to date or on any error. */
     suspend fun checkForUpdate(): UpdateInfo? = withContext(Dispatchers.IO) {
         runCatching {
-            val latest = fetchLatestRelease() ?: return@runCatching null
-            if (latest.versionCode <= BuildConfig.VERSION_CODE) null else latest
+            android.util.Log.d("Updater", "check: local versionCode=${BuildConfig.VERSION_CODE}")
+            val latest = fetchLatestRelease()
+            android.util.Log.d(
+                "Updater",
+                "remote: versionCode=${latest?.versionCode} name=${latest?.versionName}"
+            )
+            val result = if (latest != null && latest.versionCode > BuildConfig.VERSION_CODE) latest else null
+            android.util.Log.d("Updater", "updateAvailable=${result != null}")
+            result
+        }.onFailure {
+            android.util.Log.e("Updater", "check failed: ${it.message}", it)
         }.getOrNull()
     }
 
-    /** Downloads the APK of [update] into the app cache and returns the file. */
-    suspend fun downloadApk(context: Context, update: UpdateInfo): File? =
-        withContext(Dispatchers.IO) {
-            runCatching {
-                val connection = (URL(update.apkUrl).openConnection() as HttpURLConnection).apply {
-                    instanceFollowRedirects = true
-                    connectTimeout = TIMEOUT_MS
-                    readTimeout = 60_000
-                    setRequestProperty("Accept", "application/vnd.github+json")
-                }
-                try {
-                    connection.connect()
-                    if (connection.responseCode !in 200..299) return@runCatching null
-                    val dir = File(context.cacheDir, "updates").apply { mkdirs() }
-                    // Clear previous downloads to avoid stale files.
-                    dir.listFiles()?.forEach { it.delete() }
-                    val target = File(dir, "scrollfree-${update.versionCode}.apk")
-                    connection.inputStream.use { input ->
-                        target.outputStream().use { output -> input.copyTo(output) }
-                    }
-                    target.takeIf { it.length() > 0 }
-                } finally {
-                    connection.disconnect()
-                }
-            }.getOrNull()
-        }
-
     private fun fetchLatestRelease(): UpdateInfo? {
-        val url = "https://api.github.com/repos/" +
+        val apiUrl = "https://api.github.com/repos/" +
             "${BuildConfig.UPDATE_REPO_OWNER}/${BuildConfig.UPDATE_REPO_NAME}/releases/latest"
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
+        val connection = (URL(apiUrl).openConnection() as HttpURLConnection).apply {
             instanceFollowRedirects = true
             connectTimeout = TIMEOUT_MS
             readTimeout = TIMEOUT_MS
             setRequestProperty("Accept", "application/vnd.github+json")
-            setRequestProperty("User-Agent", "ScrollFree-Updater")
+            setRequestProperty("User-Agent", "ScrollFree")
         }
         try {
             connection.connect()
-            if (connection.responseCode !in 200..299) return null
+            val code = connection.responseCode
+            android.util.Log.d("Updater", "GET $apiUrl -> HTTP $code")
+            if (code !in 200..299) return null
             val body = connection.inputStream.bufferedReader().use { it.readText() }
             return parseRelease(JSONObject(body))
         } finally {
@@ -89,24 +69,9 @@ object UpdateManager {
         val versionCode = parseVersionCode(json.optString("body"))
             ?: tag.substringAfterLast('.').toIntOrNull()
             ?: return null
-
-        val assets = json.optJSONArray("assets") ?: return null
-        var apkUrl: String? = null
-        for (i in 0 until assets.length()) {
-            val asset = assets.optJSONObject(i) ?: continue
-            if (asset.optString("name").endsWith(".apk", ignoreCase = true)) {
-                apkUrl = asset.optString("browser_download_url")
-                break
-            }
-        }
-        val url = apkUrl ?: return null
-
-        return UpdateInfo(
-            versionName = tag,
-            versionCode = versionCode,
-            apkUrl = url,
-            notes = json.optString("body").takeIf { it.isNotBlank() }
-        )
+        val htmlUrl = json.optString("html_url").takeIf { it.isNotBlank() }
+            ?: "https://github.com/${BuildConfig.UPDATE_REPO_OWNER}/${BuildConfig.UPDATE_REPO_NAME}/releases"
+        return UpdateInfo(versionName = tag, versionCode = versionCode, releaseUrl = htmlUrl)
     }
 
     /**
