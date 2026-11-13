@@ -44,10 +44,15 @@ android {
 
     buildTypes {
         release {
-            optimization {
-                enable = true
-                packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
-            }
+            // Standard R8 minification + resource shrinking with explicit keep rules.
+            // (The AGP 9 "optimization { packageScope }" mode caused IllegalAccessError
+            // crashes on device because it rewrote access to inlined Kotlin symbols.)
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             // Signed with a keystore provided by CI (GitHub Secrets). When it is absent
             // (e.g. local debug builds) no signing config is applied.
             signingConfig = signingConfigs.findByName("release")
