@@ -71,6 +71,34 @@ jobs:
           echo "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
           echo "KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
 
+      - name: Verify keystore credentials
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          K="$RUNNER_TEMP/release.keystore"
+          echo "keystore size: $(stat -c%s \"$K\") bytes"
+          echo "alias length: ${#KEY_ALIAS}"
+          echo "store pass length: ${#KEYSTORE_PASSWORD}"
+          echo "key pass length: ${#KEY_PASSWORD}"
+          # Check the STORE password and list the alias.
+          if ! keytool -list -keystore "$K" -storepass "$KEYSTORE_PASSWORD" > /dev/null 2>&1; then
+            echo "::error::KEYSTORE_PASSWORD no coincide con el keystore."
+            exit 1
+          fi
+          echo "::notice::KEYSTORE_PASSWORD OK"
+          # Check the KEY password by exporting the entry (this reads the private key).
+          if ! keytool -exportcert -alias "$KEY_ALIAS" -keystore "$K" \
+                -storepass "$KEYSTORE_PASSWORD" -keypass "$KEY_PASSWORD" \
+                > /dev/null 2>&1; then
+            echo "::error::KEY_PASSWORD o KEY_ALIAS incorrectos (la clave privada no se puede leer)."
+            echo "Aliases disponibles en el keystore:"
+            keytool -list -keystore "$K" -storepass "$KEYSTORE_PASSWORD" 2>/dev/null | grep -i alias || true
+            exit 1
+          fi
+          echo "::notice::KEY_PASSWORD OK"
+
       - name: Build signed release APK
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
